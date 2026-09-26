@@ -66,37 +66,40 @@ def marker(x, name, color="#64748b", y=-0.28):
                              textposition="bottom center", textfont=dict(color=color, size=14),
                              marker=dict(size=7, color=color), showlegend=False, hovertemplate=f"{name}: %{{x:.1f}}<extra></extra>"))
 
-def arrow(x, y, height, color, name):
+def arrow(x, height, color, name):
     segment((x, 0), (x, height), color, width=5, name=name)
     fig.add_annotation(x=x, y=height, ax=x, ay=0, xref="x", yref="y", axref="x", ayref="y",
                        showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2, arrowcolor=color)
 
-# 평면거울은 입사각이 다른 세 광선; 구면 기기는 평행/중심 또는 구심/초점 광선.
+# 평면거울은 입사각이 다른 세 광선. 나머지는 평행 광선과 두 경로의 광선.
 if kind == "평면거울":
     hits = [h * 0.8, h * 0.25, -h * 0.4]
-elif mirror:
-    hits = [h, 0.0, h / 2]  # 2번 광선은 구심 방향으로 재계산
-    if kind != "평면거울":
-        c = -2 * f  # 거울의 구심: 오목은 왼쪽, 볼록은 오른쪽
-        hits[1] = h * (0 - c) / (-d - c) if abs(-d - c) > 1e-8 else None
-        # 물체가 구심에 위치하면 그 광선은 광축과 겹치므로 다른 광선으로 대체.
-        if hits[1] is None or abs(hits[1]) > 1e4:
-            hits[1] = h / 3
 else:
-    hits = [h, 0.0, h * f_abs / (d + f_abs)] if kind == "오목렌즈" else [h, 0.0, h * f_abs / (f_abs - d) if abs(f_abs-d)>1e-8 else h/2]
-    # 3번 광선은 전방 초점을 향하는 선 (초점에 물체가 있으면 대체).
-    if kind == "볼록렌즈" and abs(d-f_abs)>1e-8 and abs(hits[2]) > 5*h:
-        hits[2] = h/2
+    hits = [h, 0.0, h / 2]
 
 # 세 번째 광선의 출사 방향은 같은 상을 지나는 직선으로 결정한다.
 xlim = min(85.0, max(27.0, d + 5, abs(xi) * 1.17 if math.isfinite(xi) else 35.0, 2*f_abs+5))
 ymax = min(38.0, max(5.5, h * 1.8, abs(yi) * 1.17 if math.isfinite(yi) else h*3))
 segment((-xlim, 0), (xlim, 0), "#94a3b8", dash="dot", width=1.5, name="광축")
+device_h = min(ymax * .83, max(3.4, h * 1.45))
+ys = [device_h * (i - 40) / 40 for i in range(81)]
 if mirror:
-    segment((0, -ymax), (0, ymax), "#475569", width=4, name=kind)
-    fig.add_annotation(x=0, y=ymax*0.94, text="거울 뒤 →", showarrow=False, font=dict(color="#64748b"), xanchor="left")
+    curvature = -0.72 if kind == "오목거울" else (0.72 if kind == "볼록거울" else 0)
+    edge = [curvature * (y / device_h) ** 2 for y in ys]
+    fig.add_trace(go.Scatter(x=edge, y=ys, mode="lines", line=dict(color="#334155", width=7),
+                             name=kind, hoverinfo="skip"))
+    for y in ys[::10]:
+        x = curvature * (y / device_h) ** 2
+        segment((x + .13, y - .15), (x + .49, y + .23), "#94a3b8", width=1.3)
+    fig.add_annotation(x=0.9, y=device_h + .5, text="거울 뒤 →", showarrow=False,
+                       font=dict(color="#64748b", size=13), xanchor="left")
 else:
-    segment((0, -ymax), (0, ymax), "#6366f1", width=4, name=kind)
+    thickness = [(.22 + .65 * (1 - (y / device_h) ** 2)) if kind == "볼록렌즈"
+                 else (.20 + .65 * (y / device_h) ** 2) for y in ys]
+    fig.add_trace(go.Scatter(x=[-v for v in thickness] + list(reversed(thickness)),
+                             y=ys + list(reversed(ys)), fill="toself", mode="lines",
+                             line=dict(color="#2563eb", width=2.5), fillcolor="rgba(125,211,252,.45)",
+                             name=kind, hoverinfo="skip"))
     marker(0, "O (광학 중심)")
     marker(-f_abs if f > 0 else f_abs, "F₁")
     marker(f_abs if f > 0 else -f_abs, "F₂")
@@ -115,16 +118,13 @@ for idx, hit in enumerate(hits[:count]):
     source, surface = (-d, h), (0, hit)
     segment(source, surface, color, name=f"광선 {idx+1}")
     if mirror:
-        # 평면거울 포함: q로부터 얻은 반사 광선의 기울기.
-        if at_infinity:
-            slope = (hit - h) / d
-        else:
-            slope = (yi - hit) / (xi if abs(xi) > 1e-8 else -1e-8)
+        # 근축 근사에서 반사광 기울기. x<0이 거울 앞쪽이다.
+        slope = (h - hit) / d + (0 if math.isinf(f) else hit / f)
         segment(surface, (-xlim, hit - slope*xlim), color)
         if not at_infinity and q < 0:
             segment(surface, (min(xlim, xi*1.14), hit + slope*min(xlim, xi*1.14)), color, "dash", 1.6)
     else:
-        slope = (yi - hit) / xi if not at_infinity and abs(xi)>1e-8 else (hit-h)/d - hit/f
+        slope = (hit-h)/d - hit/f
         segment(surface, (xlim, hit + slope*xlim), color)
         if not at_infinity and q < 0:
             segment(surface, (max(-xlim, xi*1.14), hit + slope*max(-xlim, xi*1.14)), color, "dash", 1.6)
@@ -141,5 +141,5 @@ if not at_infinity:
     st.caption(f"물체 거리 dₒ={d:.1f}, 상 거리 dᵢ={q:.1f}, 상 높이={yi:.1f} (부호는 빛의 실제 진행 방향 기준). 거울은 그림의 왼쪽이 앞쪽이므로 상 좌표 x=−dᵢ입니다.")
 else:
     st.caption("초점에 놓인 물체: 상 거리와 배율은 무한대로 발산합니다.")
-st.markdown("**광선 읽는 법**  빨강: 광축에 평행한 입사광 · 파랑: 중심/구심을 향하는 입사광 · 초록: 다른 경로의 입사광. 평면거울은 서로 다른 세 입사각을 표시합니다. 점선은 허상으로 향하는 역연장선입니다.")
-st.caption("구면 렌즈와 거울의 근축 광선 모델입니다. 실제 기기의 두께, 구면 수차, 거울 면의 곡률에 따른 입사 위치는 생략했습니다.")
+st.markdown("**그림 읽는 법**  파란 화살표는 물체, 보라 화살표는 상입니다. 빨강·하늘·초록색은 세 경로의 광선이며, 점선은 허상을 찾기 위한 역연장선입니다. F는 초점, C는 구심, O는 렌즈의 중심, V는 거울의 중심입니다.")
+st.caption("그림의 렌즈 굴곡과 거울 곡면은 형태를 알아보기 위한 모식도입니다. 광선은 중심 x=0에서 꺾이는 근축 근사로 계산하므로 실제 곡면과 교차하는 지점은 정밀하게 반영되지 않습니다.")
