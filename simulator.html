@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {font-family:system-ui,-apple-system,"Malgun Gothic",sans-serif;color:#17253f}
+  * {box-sizing:border-box} body {margin:0;background:#fff} main {padding:24px 4px 0}
+  h1 {font-size:clamp(23px,3vw,35px);margin:0 0 14px;line-height:1.35;letter-spacing:-.04em}
+  .devices {display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px}
+  .groups {display:flex;gap:7px;margin:0 0 12px}
+  .groups button {min-height:38px;padding:7px 14px;font-size:14px}
+  .extras {display:flex;gap:8px;align-items:center;margin:0 0 12px;flex-wrap:wrap}
+  .under {flex-wrap:wrap}
+  button {cursor:pointer;border:1.5px solid #cbd5e1;background:#fff;color:#30415c;border-radius:12px;
+          padding:10px 16px;min-height:46px;font:600 16px system-ui,sans-serif;touch-action:manipulation}
+  button.active {background:#1d4ed8;color:white;border-color:#1d4ed8}
+  .controls {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-bottom:13px}
+  .control {min-width:0} .control label {display:flex;justify-content:space-between;gap:6px;font-size:16px;font-weight:650;margin-bottom:7px}
+  output {color:#1d4ed8;font-variant-numeric:tabular-nums}
+  input[type=range] {width:100%;height:34px;margin:0;accent-color:#2563eb;cursor:pointer;touch-action:none}
+  .control.disabled {opacity:.42}
+  [hidden] {display:none !important}
+  .frame {border:1px solid #dce5f2;border-radius:17px;background:#f9fbff;overflow:hidden}
+  canvas {display:block;width:100%;height:clamp(370px,48vw,580px)}
+  .under {display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 13px;border-top:1px solid #e3eaf4}
+  .under span {font-size:15px;font-weight:650}
+  .count {display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .count button {padding:5px 11px;min-height:36px;font-size:15px}
+  @media(max-width:760px) {
+    main {padding-top:18px} h1 {margin:0 0 12px} .devices {gap:6px;margin-bottom:12px}
+    .devices button {flex:1 1 29%;padding:8px 6px;font-size:14px;min-height:43px}
+    .controls {gap:9px} .control label {font-size:13px;flex-wrap:wrap}
+    .under span {font-size:12px} .count button {font-size:13px;padding:4px 8px}
+  }
+</style></head><body><main>
+  <h1>🔎 광선 추적 실험실</h1>
+  <nav class="groups" aria-label="실험 분류"><button data-group="0" type="button" class="active">렌즈 · 거울 · 프리즘</button><button data-group="1" type="button">광학 기기 · 수차</button></nav>
+  <nav class="devices" aria-label="광학 기기"></nav>
+  <section class="controls">
+    <div class="control optics"><label for="distance">물체 거리 <output id="distanceValue">12.0</output></label><input id="distance" type="range" min="2" max="24" step="0.1" value="12"></div>
+    <div class="control optics" id="focusControl"><label for="focus">초점 거리 <output id="focusValue">6.0</output></label><input id="focus" type="range" min="2" max="12" step="0.1" value="6"></div>
+    <div class="control optics"><label for="height">물체 높이 <output id="heightValue">2.5</output></label><input id="height" type="range" min="0.5" max="5" step="0.1" value="2.5"></div>
+    <div class="control dispersion" hidden><label for="angle">꼭짓각 <output id="angleValue">60°</output></label><input id="angle" type="range" min="60" max="70" step="1" value="60"></div>
+    <div class="control prisms" hidden><label for="index">기준 굴절률 <output id="indexValue">1.52</output></label><input id="index" type="range" min="1.45" max="1.60" step="0.01" value="1.52"></div>
+    <div class="control prisms" hidden><label for="entry">입사 높이 <output id="entryValue">0.0</output></label><input id="entry" type="range" min="-1" max="1.5" step="0.1" value="0"></div>
+  </section>
+  <section id="advancedControls" class="controls" hidden></section>
+  <div id="advancedExtras" class="extras" hidden>
+    <button type="button" id="autofocus">자동 초점</button>
+    <button type="button" id="spherical">구면수차</button>
+    <button type="button" id="chromatic">색수차</button>
+  </div>
+  <div class="frame"><canvas id="diagram" role="img" aria-label="선택한 광학 기기, 물체, 광선과 상의 그림"></canvas>
+    <div class="under"><span id="result" aria-live="polite"></span><div class="count" id="rayControls"><span>광선</span>
+      <button type="button" data-rays="1">1개</button><button type="button" data-rays="2">2개</button><button type="button" data-rays="3">3개</button></div></div>
+  </div>
+</main>
+<script>
+(() => {
+  const names=['볼록렌즈','오목렌즈','평면거울','볼록거울','오목거울','분산 프리즘','직각 프리즘',
+               '카메라','현미경','반사망원경','수차','쌍안경'];
+  const state={kind:0,rays:3,target:{d:12,f:6,h:2.5,angle:60,index:1.52,entry:0},
+               shown:{d:12,f:6,h:2.5,angle:60,index:1.52,entry:0}};
+  const canvas=document.getElementById('diagram'),ctx=canvas.getContext('2d');
+  const inputs={d:document.getElementById('distance'),f:document.getElementById('focus'),h:document.getElementById('height'),
+                angle:document.getElementById('angle'),index:document.getElementById('index'),entry:document.getElementById('entry')};
+  const outputs={d:document.getElementById('distanceValue'),f:document.getElementById('focusValue'),h:document.getElementById('heightValue'),
+                 angle:document.getElementById('angleValue'),index:document.getElementById('indexValue'),entry:document.getElementById('entryValue')};
+  const colors=['#e74747','#05a4ce','#19a563'];
+  const nav=document.querySelector('.devices');
+  const defs={
+    7:[['camD','물체 거리',8,24,16,.1],['camF','렌즈 초점 거리',2,5,3,.1],['camSensor','렌즈–센서 거리',2,15,48/13,.01],['camA','조리개 반지름',.7,2.8,2,.1]],
+    8:[['micF','대물렌즈 초점 거리',2,3,2.5,.1],['micRatio','물체 거리 / 초점 거리',1.3,1.8,1.5,.01],['micEye','접안렌즈 초점 거리',2,4,3,.1],['micNear','중간 상–접안 거리 / 초점 거리',.55,.8,.75,.01]],
+    9:[['newtF','주거울 초점 거리',6,10,8,.1],['newtEye','접안렌즈 초점 거리',1.5,3,2,.1],['newtAngle','입사광 기울기 (°)',-2,2,1,.1]],
+    10:[['abF','렌즈 초점 거리',5,10,7,.1],['abA','입사광 높이',1,4,3,.1],['abStrength','수차 정도',0,1,.7,.01]],
+    11:[['binF','대물렌즈 초점 거리',28,34,32,.1],['binEye','접안렌즈 초점 거리',2,5,4,.1]]
+  };
+  state.abMode=0;
+  Object.values(defs).flat().forEach(([key,title,min,max,value,step])=>{
+    state.target[key]=value;state.shown[key]=value;
+  });
+  function buildAdvanced(){
+    let host=document.getElementById('advancedControls');host.replaceChildren();
+    (defs[state.kind]||[]).forEach(([key,title,min,max,value,step])=>{
+      let box=document.createElement('div');box.className='control';
+      let lab=document.createElement('label');lab.htmlFor=key;
+      let out=document.createElement('output');out.textContent=state.target[key].toFixed(2);
+      lab.append(document.createTextNode(title),out);
+      let slider=document.createElement('input');slider.type='range';slider.id=key;
+      slider.min=min;slider.max=max;slider.step=step;slider.value=state.target[key];
+      slider.addEventListener('input',()=>{state.target[key]=Number(slider.value);out.textContent=Number(slider.value).toFixed(2);requestDraw()});
+      box.append(lab,slider);host.appendChild(box);
+    });
+  }
+  for(let i=0;i<names.length;i++){
+    let b=document.createElement('button');b.type='button';b.textContent=names[i];
+    b.onclick=()=>{state.kind=i;buildAdvanced();updateButtons();requestDraw()};nav.appendChild(b);
+  }
+  document.querySelectorAll('[data-group]').forEach(b=>b.onclick=()=>{
+    state.kind=Number(b.dataset.group)===0?0:7;buildAdvanced();updateButtons();requestDraw();
+  });
+  document.getElementById('autofocus').onclick=()=>{
+    state.target.camSensor=1/(1/state.target.camF-1/state.target.camD);buildAdvanced();requestDraw();
+  };
+  ['spherical','chromatic'].forEach((id,i)=>document.getElementById(id).onclick=()=>{
+    state.abMode=i;updateButtons();requestDraw();
+  });
+  function updateButtons(){
+    [...nav.children].forEach((b,i)=>{b.classList.toggle('active',i===state.kind);b.setAttribute('aria-pressed',i===state.kind)});
+    [...nav.children].forEach((b,i)=>b.hidden=(i<7)!==(state.kind<7));
+    document.querySelectorAll('[data-group]').forEach(b=>b.classList.toggle('active',Number(b.dataset.group)===(state.kind<7?0:1)));
+    document.querySelectorAll('[data-rays]').forEach(b=>{
+      let active=Number(b.dataset.rays)===state.rays;
+      b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);
+    });
+    let plane=state.kind===2;inputs.f.disabled=plane;
+    document.getElementById('focusControl').classList.toggle('disabled',plane);
+    document.querySelectorAll('.optics').forEach(el=>el.hidden=state.kind>=5);
+    document.querySelectorAll('.dispersion').forEach(el=>el.hidden=state.kind!==5);
+    document.querySelectorAll('.prisms').forEach(el=>el.hidden=state.kind<5||state.kind>6);
+    document.getElementById('rayControls').hidden=state.kind===6;
+    document.getElementById('advancedControls').hidden=state.kind<7;
+    document.getElementById('advancedExtras').hidden=state.kind!==7&&state.kind!==10;
+    document.getElementById('autofocus').hidden=state.kind!==7;
+    ['spherical','chromatic'].forEach((id,i)=>{
+      let b=document.getElementById(id);b.hidden=state.kind!==10;b.classList.toggle('active',i===state.abMode);
+    });
+  }
+  document.querySelectorAll('[data-rays]').forEach(b=>b.onclick=()=>{
+    state.rays=Number(b.dataset.rays);updateButtons();requestDraw();
+  });
+  for(let key of Object.keys(inputs))inputs[key].addEventListener('input',()=>{
+    state.target[key]=Number(inputs[key].value);
+    outputs[key].textContent=key==='angle'?`${state.target[key].toFixed(0)}°`:
+      state.target[key].toFixed(key==='index'?2:1);
+    requestDraw();
+  });
+  let pending=false;
+  function requestDraw(){if(!pending){pending=true;requestAnimationFrame(frame)}}
+  function frame(){
+    pending=false;let moving=false;
+    for(let key of Object.keys(state.target)){
+      let delta=state.target[key]-state.shown[key];
+      if(Math.abs(delta)>.002){state.shown[key]+=delta*.36;moving=true}
+      else state.shown[key]=state.target[key];
+    }
+    draw();if(moving)requestDraw();
+  }
+  let W=0,H=0,S=1,OX=0,OY=0;
+  const X=x=>OX+x*S,Y=y=>OY-y*S;
+  function line(x1,y1,x2,y2,color,width=2,dash=[]){
+    ctx.save();ctx.beginPath();ctx.setLineDash(dash);ctx.moveTo(X(x1),Y(y1));ctx.lineTo(X(x2),Y(y2));
+    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.stroke();ctx.restore();
+  }
+  function flowHead(x1,y1,x2,y2,color){
+    let dx=X(x2)-X(x1),dy=Y(y2)-Y(y1),length=Math.hypot(dx,dy);
+    if(length<1)return;
+    dx/=length;dy/=length;
+    let px=X(x2),py=Y(y2);
+    ctx.beginPath();ctx.moveTo(px,py);
+    ctx.lineTo(px-15*dx-6*dy,py-15*dy+6*dx);
+    ctx.lineTo(px-15*dx+6*dy,py-15*dy-6*dx);
+    ctx.closePath();ctx.fillStyle=color;ctx.fill();
+  }
+  function label(t,x,y,color='#344562',size=15,align='center'){
+    ctx.save();ctx.fillStyle=color;ctx.font=`600 ${size}px system-ui,sans-serif`;
+    ctx.textAlign=align;ctx.fillText(t,X(x),Y(y));ctx.restore();
+  }
+  function point(x,name){
+    ctx.beginPath();ctx.arc(X(x),Y(0),4,0,Math.PI*2);ctx.fillStyle='#5d6f8d';ctx.fill();
+    label(name,x,-.8,'#415575',Math.max(12,Math.min(15,W/75)));
+  }
+  function verticalArrow(x,y,color,name,virtual=false){
+    line(x,0,x,y,color,5,virtual?[7,5]:[]);
+    let sign=Math.sign(y)||1,xp=X(x),yp=Y(y);
+    ctx.beginPath();ctx.moveTo(xp,yp);ctx.lineTo(xp-7,yp+sign*14);ctx.lineTo(xp+7,yp+sign*14);
+    ctx.closePath();ctx.fillStyle=color;ctx.fill();
+    label(name,x+.65,y+sign*1,color,14,'left');
+  }
+  function drawDevice(kind,dh){
+    ctx.save();
+    if(kind<2){
+      ctx.beginPath();
+      for(let i=0;i<=80;i++){
+        let y=-dh+2*dh*i/80,t=y/dh;
+        let width=kind===0?.22+.55*(1-t*t):.19+.55*t*t;
+        if(i===0)ctx.moveTo(X(-width),Y(y));else ctx.lineTo(X(-width),Y(y));
+      }
+      for(let i=80;i>=0;i--){
+        let y=-dh+2*dh*i/80,t=y/dh;
+        let width=kind===0?.22+.55*(1-t*t):.19+.55*t*t;
+        ctx.lineTo(X(width),Y(y));
+      }
+      ctx.closePath();ctx.fillStyle='rgba(77,171,245,.27)';ctx.fill();
+      ctx.lineWidth=3;ctx.strokeStyle='#2563eb';ctx.stroke();
+    }else{
+      let curve=kind===4?-.75:(kind===3?.75:0);
+      ctx.beginPath();
+      for(let i=0;i<=80;i++){
+        let y=-dh+2*dh*i/80,x=curve*(y/dh)**2;
+        if(i===0)ctx.moveTo(X(x),Y(y));else ctx.lineTo(X(x),Y(y));
+      }
+      ctx.lineWidth=7;ctx.strokeStyle='#3c526c';ctx.stroke();
+      for(let i=-5;i<=5;i++){
+        let y=dh*i/6,x=curve*(y/dh)**2;
+        line(x+.14,y-.13,x+.46,y+.21,'#9baabe',1.2);
+      }
+    }
+    ctx.restore();
+  }
+  const cross=(a,b)=>a.x*b.y-a.y*b.x;
+  const subtract=(a,b)=>({x:a.x-b.x,y:a.y-b.y});
+  const normalize=v=>{let z=Math.hypot(v.x,v.y);return {x:v.x/z,y:v.y/z}};
+  function intersection(p,d,a,b){
+    let e=subtract(b,a),den=cross(d,e);
+    if(Math.abs(den)<1e-8)return null;
+    let v=subtract(a,p),t=cross(v,e)/den,u=cross(v,d)/den;
+    return t>=0&&u>=0&&u<=1?{x:p.x+t*d.x,y:p.y+t*d.y}:null;
+  }
+  // N은 투과하는 쪽의 법선. 접선 성분에 스넬 법칙을 적용한다.
+  function refract(v,n,from,to){
+    let along=v.x*n.x+v.y*n.y,scale=from/to;
+    let tx=scale*(v.x-along*n.x),ty=scale*(v.y-along*n.y);
+    if(tx*tx+ty*ty>1)return null; // 전반사일 때 투과광 없음
+    let normal=Math.sqrt(1-tx*tx-ty*ty);
+    return {x:tx+normal*n.x,y:ty+normal*n.y};
+  }
+  function drawPrism(){
+    S=Math.min((W-32)/23,(H-40)/16);OX=W*.46;OY=H*.40;
+    const {angle,index,entry}=state.shown;
+    let half=4*Math.tan(angle*Math.PI/360);
+    const bl={x:-half,y:-4},top={x:0,y:4},br={x:half,y:-4};
+    ctx.beginPath();ctx.moveTo(X(bl.x),Y(bl.y));ctx.lineTo(X(top.x),Y(top.y));
+    ctx.lineTo(X(br.x),Y(br.y));ctx.closePath();
+    ctx.fillStyle='rgba(125,211,252,.26)';ctx.fill();
+    ctx.lineWidth=3;ctx.strokeStyle='#3873ae';ctx.stroke();
+    // 기준 파장이 최소 편차에 가까워지도록 입사각을 맞춘다.
+    let halfAngle=angle*Math.PI/360;
+    let tilt=Math.asin(index*Math.sin(halfAngle))-halfAngle;
+    let dir={x:Math.cos(tilt),y:Math.sin(tilt)};
+    let first={x:-half*(4-entry)/8,y:entry};
+    let origin={x:first.x-7*dir.x,y:first.y-7*dir.y};
+    line(origin.x,origin.y,first.x,first.y,'#8f9bab',9);
+    line(origin.x,origin.y,first.x,first.y,'#ffffff',6);
+    const l=normalize(subtract(top,bl)),r=normalize(subtract(br,top));
+    const insideNormal={x:l.y,y:-l.x},outsideNormal={x:-r.y,y:r.x};
+    // 대표 파장 세 가지의 굴절률 차이를 시각적으로 확대한다.
+    const spectra=[{color:'#f04438',n:index-.05},
+                   {color:'#0ba768',n:index},
+                   {color:'#793ade',n:index+.05}];
+    spectra.slice(0,state.rays).forEach(s=>{
+      let inner=refract(dir,insideNormal,1,s.n);
+      if(!inner)return;
+      let second=intersection(first,inner,top,br);
+      if(!second)return;
+      let out=refract(inner,outsideNormal,s.n,1);
+      if(!out)return;
+      let xend=10.2,yend=second.y+out.y/out.x*(xend-second.x);
+      line(first.x,first.y,second.x,second.y,s.color,3.5);
+      line(second.x,second.y,xend,yend,s.color,4.6);
+    });
+    document.getElementById('result').textContent='백색광의 분산 · 색 분리 시각화 확대';
+  }
+  function drawRightPrism(){
+    S=Math.min((W-32)/22,(H-40)/16);OX=W*.48;OY=H*.42;
+    const {entry,index}=state.shown;
+    const left={x:-3,y:-3},right={x:3,y:-3},top={x:3,y:3};
+    ctx.beginPath();ctx.moveTo(X(left.x),Y(left.y));ctx.lineTo(X(right.x),Y(right.y));
+    ctx.lineTo(X(top.x),Y(top.y));ctx.closePath();
+    ctx.fillStyle='rgba(125,211,252,.30)';ctx.fill();ctx.lineWidth=3;
+    ctx.strokeStyle='#3873ae';ctx.stroke();
+    let source={x:9,y:entry},enter={x:3,y:entry};
+    let reflect={x:entry,y:entry},exit={x:entry,y:-3},end={x:entry,y:-7};
+    line(source.x,source.y,enter.x,enter.y,'#8f9bab',9);
+    line(source.x,source.y,enter.x,enter.y,'#fff',6);
+    flowHead(8,entry,6,entry,'#8f9bab');
+    line(enter.x,enter.y,reflect.x,reflect.y,'#f2a229',4);
+    line(reflect.x,reflect.y,exit.x,exit.y,'#f2a229',4);
+    line(exit.x,exit.y,end.x,end.y,'#f2a229',4);
+    flowHead(entry,-5.7,entry,-6.5,'#f2a229');
+    document.getElementById('result').textContent=
+      `전반사: 빛의 진행 방향 90° 전환 · 굴절률 ${index.toFixed(2)}`;
+  }
+  function fitWorld(xmin,xmax,ymin,ymax,fraction=1){
+    let width=W*fraction-36;
+    S=Math.min(width/(xmax-xmin),(H-65)/(ymax-ymin));
+    OX=18+width/2-(xmin+xmax)*S/2;OY=H/2+(ymin+ymax)*S/2;
+  }
+  function lensAt(x,y,half=3){
+    let oldX=OX,oldY=OY;OX+=x*S;OY-=y*S;drawDevice(0,half);OX=oldX;OY=oldY;
+  }
+  function horizontalLens(x,y,half=1.8){
+    ctx.beginPath();
+    for(let side of [-1,1])for(let i=0;i<=60;i++){
+      let t=side===-1?-1+2*i/60:1-2*i/60;
+      let px=x+t*half,py=y+side*(.16+.35*(1-t*t));
+      if(side===-1&&i===0)ctx.moveTo(X(px),Y(py));else ctx.lineTo(X(px),Y(py));
+    }
+    ctx.closePath();ctx.fillStyle='rgba(77,171,245,.27)';ctx.fill();ctx.strokeStyle='#2563eb';ctx.lineWidth=2.5;ctx.stroke();
+  }
+  function tree(x,base,height,color='#26936b'){
+    let half=Math.abs(height)*.27;
+    ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(X(x),Y(base+height));
+    ctx.lineTo(X(x-half),Y(base+height*.25));ctx.lineTo(X(x+half),Y(base+height*.25));
+    ctx.closePath();ctx.fill();line(x,base,x,base+height*.35,color,Math.max(3,half*S*.28));
+  }
+  function preview(title,blur,inverted=true,tints=null){
+    let px=W*.77,py=H*.16,pw=W*.21,ph=H*.66;
+    ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle='#d1dbea';ctx.lineWidth=1.5;
+    ctx.fillRect(px,py,pw,ph);ctx.strokeRect(px,py,pw,ph);
+    ctx.fillStyle='#344562';ctx.font='600 13px system-ui';ctx.textAlign='center';ctx.fillText(title,px+pw/2,py+23);
+    ctx.beginPath();ctx.rect(px+3,py+35,pw-6,ph-40);ctx.clip();
+    let cx=px+pw/2,cy=py+ph*.53,size=Math.min(pw*.60,ph*.55);
+    let drawTree=(dx,color)=>{
+      ctx.save();ctx.translate(cx+dx,cy);if(inverted)ctx.rotate(Math.PI);
+      ctx.filter=`blur(${Math.min(18,blur)}px)`;
+      ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(0,-size*.5);ctx.lineTo(-size*.35,size*.22);ctx.lineTo(size*.35,size*.22);ctx.closePath();ctx.fill();
+      ctx.fillRect(-size*.04,size*.1,size*.08,size*.35);ctx.restore();
+    };
+    if(tints)tints.forEach(([dx,c])=>drawTree(dx,c));else drawTree(0,'#219678');
+    ctx.restore();
+  }
+  function drawCamera(){
+    const {camD:d,camF:f,camSensor:sensor,camA:a}=state.shown;
+    let q=1/(1/f-1/d),objh=2.5,ih=-q*objh/d;
+    fitWorld(-d-2,Math.max(q,sensor)+2,-6,6,.75);
+    line(-d-1,0,sensor+1,0,'#94a3b8',1.3,[4,5]);
+    ctx.save();ctx.fillStyle='rgba(91,112,145,.06)';ctx.strokeStyle='#6f829e';ctx.lineWidth=2;
+    ctx.fillRect(X(.7),Y(4),Math.max(1,(sensor-.7)*S),8*S);ctx.strokeRect(X(.7),Y(4),Math.max(1,(sensor-.7)*S),8*S);ctx.restore();
+    lensAt(0,0,3.4);line(0,a,0,3.8,'#4c5e79',6);line(0,-a,0,-3.8,'#4c5e79',6);
+    tree(-d,0,objh);label('물체',-d,-1.2,'#26856a',13);
+    line(sensor,-3.5,sensor,3.5,'#9b42d0',4);label('센서',sensor,-4.8,'#8543bc',13);
+    label('렌즈',0,4.5,'#2563eb',13);point(f,'F');
+    [-a,0,a].slice(0,state.rays).forEach((hit,i)=>{
+      let slope=(hit-objh)/d-hit/f,ys=hit+slope*sensor;
+      line(-d,objh,0,hit,colors[i],2.4);line(0,hit,sensor,ys,colors[i],2.4);
+    });
+    let blur=Math.abs(1-sensor/q)*a;
+    if(Math.abs(sensor-q)>.12){verticalArrow(q,ih,'#b790ce','실상',true)}
+    preview('센서에 맺힌 상',blur*17,true);
+    document.getElementById('result').textContent=blur<.035?'초점 일치 · 선명한 도립 실상':'초점 불일치 · 센서 위치를 조절해 보세요';
+  }
+  function drawMicroscope(){
+    const {micF:f1,micRatio:ratio,micEye:f2,micNear:near}=state.shown;
+    let d=f1*ratio,q=1/(1/f1-1/d),objh=.45,h1=-q*objh/d;
+    let L=q+f2*near,de=L-q,qe=1/(1/f2-1/de),finalX=L+qe,finalH=-qe*h1/de;
+    fitWorld(Math.min(-d-2,finalX-2),L+7,Math.min(-4,finalH-1.5),4.8);
+    line(Math.min(-d-1,finalX-1),0,L+6,0,'#94a3b8',1.3,[4,5]);
+    lensAt(0,0,2.7);lensAt(L,0,3.2);
+    label('대물렌즈',0,3.6,'#2563eb',13);label('접안렌즈',L,4.1,'#2563eb',13);
+    verticalArrow(-d,objh,'#2259c7','물체');verticalArrow(q,h1,'#8e47c4','중간 실상');
+    verticalArrow(finalX,finalH,'#d18a25','최종 허상',true);
+    point(-f1,'F₁');point(f1,'F₁′');point(L-f2,'F₂');
+    [objh,0,-objh].slice(0,state.rays).forEach((hit,i)=>{
+      let s1=(hit-objh)/d-hit/f1,eyeY=hit+s1*L,s2=s1-eyeY/f2;
+      line(-d,objh,0,hit,colors[i],2.2);line(0,hit,L,eyeY,colors[i],2.2);
+      line(L,eyeY,L+6,eyeY+s2*6,colors[i],2.2);
+      line(L,eyeY,finalX,finalH,colors[i],1.4,[6,5]);
+    });
+    document.getElementById('result').textContent=`중간 실상 → 확대된 도립 허상 · 전체 배율 ${Math.abs(finalH/objh).toFixed(1)}배`;
+  }
+  function drawReflector(){
+    const {newtF:f,newtEye:fe,newtAngle:angle}=state.shown;
+    let t=Math.tan(angle*Math.PI/180),primary=20,secondary=primary-f+2,focusY=2,eyeY=focusY+fe;
+    fitWorld(-1,23,-4.8,eyeY+4.5);
+    line(0,0,primary,0,'#a0aec2',1.2,[4,5]);line(secondary,-1,secondary,eyeY+4,'#a0aec2',1.2,[4,5]);
+    line(1,-3.3,20.8,-3.3,'#a2adbf',6);line(1,3.3,20.8,3.3,'#a2adbf',6);
+    ctx.beginPath();for(let i=0;i<=60;i++){let y=-3+6*i/60,x=primary-.05*y*y;if(i===0)ctx.moveTo(X(x),Y(y));else ctx.lineTo(X(x),Y(y))}
+    ctx.strokeStyle='#2563eb';ctx.lineWidth=6;ctx.stroke();
+    line(secondary-.85,.85,secondary+.85,-.85,'#63748d',7);
+    horizontalLens(secondary,eyeY,1.5);
+    label('오목 주거울',primary-1,-4.2,'#2563eb',12);
+    label('평면 부거울',secondary-2,1.5,'#566881',12);
+    label('접안렌즈',secondary+2.5,eyeY+.7,'#2563eb',12);
+    let ix=secondary-f*t;
+    line(secondary,focusY,ix,focusY,'#9b42d0',5);
+    label('중간 실상',secondary+3,focusY+.2,'#9b42d0',12);
+    [-2.4,-1.7,2.4].slice(0,state.rays).forEach((a,i)=>{
+      let slope=-t+a/f,x=(secondary-a+primary*slope)/(1+slope),y=secondary-x;
+      let xe=x+slope*(eyeY-y),out=slope-(xe-secondary)/fe,endY=eyeY+3.5;
+      line(0,a-t*primary,primary,a,colors[i],2.2);flowHead(5,a-t*(primary-5),8,a-t*(primary-8),colors[i]);
+      line(primary,a,x,y,colors[i],2.2);flowHead(primary-1,a-slope,primary-3,a-3*slope,colors[i]);
+      line(x,y,xe,eyeY,colors[i],2.2);
+      line(xe,eyeY,xe+out*(endY-eyeY),endY,colors[i],2.2);
+    });
+    document.getElementById('result').textContent=`주거울 집광 → 부거울 반사 → 접안렌즈 · 각배율 ${(f/fe).toFixed(1)}배`;
+  }
+  function drawAberration(){
+    const {abF:f,abA:a,abStrength:k}=state.shown;
+    fitWorld(-7,f+6,-5,5,.75);
+    line(-6,0,f+5,0,'#94a3b8',1.3,[4,5]);lensAt(0,0,4.3);
+    label('렌즈',0,4.8,'#2563eb',13);point(f,'F (이상)');
+    line(f,-3.5,f,3.5,'#bfa1d0',1.3,[5,5]);
+    if(state.abMode===0){
+      [-a,a*.35,a].slice(0,state.rays).forEach((hit,i)=>{
+        let eff=f*(1-.23*k*(hit/a)**2);
+        line(-6,hit,0,hit,'#ed4d45',2.6);line(0,hit,f+4,hit*(1-(f+4)/eff),'#ed4d45',2.6);
+        ctx.beginPath();ctx.arc(X(eff),Y(0),4,0,Math.PI*2);ctx.fillStyle='#ed4d45';ctx.fill();
+      });
+      preview('상 모식도',k*a*2.7,false);
+      document.getElementById('result').textContent='구면수차 · 렌즈 주변부와 중심부의 초점 차이';
+    }else{
+      line(-6,a,0,a,'#a2aebd',8);line(-6,a,0,a,'#fff',5);
+      const spectral=[{f:f*(1+.18*k),c:'#ef4444'},{f,c:'#18a95f'},{f:f*(1-.18*k),c:'#387ae8'}];
+      spectral.slice(0,state.rays).forEach(s=>{
+        line(0,a,f+4,a*(1-(f+4)/s.f),s.c,3);
+        ctx.beginPath();ctx.arc(X(s.f),Y(0),4,0,Math.PI*2);ctx.fillStyle=s.c;ctx.fill();
+      });
+      preview('상 모식도',.5,false,k===0?null:[[-k*7,'#3478ef'],[k*7,'#ed4d45'],[0,'#17253f']]);
+      document.getElementById('result').textContent='색수차 · 파장별 초점 차이 (시각화 확대)';
+    }
+  }
+  function prismPolygon(vertices){
+    ctx.beginPath();vertices.forEach((p,i)=>i===0?ctx.moveTo(X(p.x),Y(p.y)):ctx.lineTo(X(p.x),Y(p.y)));
+    ctx.closePath();ctx.fillStyle='rgba(125,211,252,.23)';ctx.fill();ctx.strokeStyle='#4d8bb5';ctx.lineWidth=2.5;ctx.stroke();
+  }
+  function foldedPrism(origin,d,vertices,color){
+    let p=origin,dir=d;
+    for(let pass=0;pass<4;pass++){
+      let nearest=null,edge=-1,distance=Infinity;
+      for(let i=0;i<3;i++){
+        let hit=intersection(p,dir,vertices[i],vertices[(i+1)%3]);
+        if(!hit)continue;let dist=Math.hypot(hit.x-p.x,hit.y-p.y);
+        if(dist>1e-6&&dist<distance){nearest=hit;edge=i;distance=dist}
+      }
+      if(!nearest)return null;
+      line(p.x,p.y,nearest.x,nearest.y,color,2.4);
+      p=nearest;
+      if(pass===0)continue; // 수직 입·출사면의 근축 전개 모형
+      let a=vertices[edge],b=vertices[(edge+1)%3];
+      if(Math.abs(a.x-b.x)<1e-8)return {p,dir};
+      let v=normalize(subtract(b,a)),normal={x:-v.y,y:v.x};
+      let dot=dir.x*normal.x+dir.y*normal.y;
+      dir={x:dir.x-2*dot*normal.x,y:dir.y-2*dot*normal.y};
+    }
+    return null;
+  }
+  function drawBinocular(){
+    const {binF:f,binEye:fe}=state.shown;
+    let eye=f+fe-20;
+    fitWorld(-5,Math.max(22,eye+5),-5.7,7.2);
+    const A=[{x:10,y:-3},{x:13,y:0},{x:10,y:3}];
+    const B=[{x:6,y:-.5},{x:6,y:5.5},{x:3,y:2.5}];
+    prismPolygon(A);prismPolygon(B);
+    lensAt(0,-1,2);lensAt(eye,4,1);
+    label('대물렌즈',0,-4,'#2563eb',12);label('접안렌즈',eye,6.2,'#2563eb',12);
+    label('프리즘 ①',11.5,-4,'#557ba2',12);label('프리즘 ②',4,6.4,'#557ba2',12);
+    [-.6,0,.6].slice(0,state.rays).forEach((a,i)=>{
+      let color=colors[i],p={x:0,y:-1+a},dir=normalize({x:1,y:-a/f});
+      line(-4,p.y,p.x,p.y,color,2.4);flowHead(-4,p.y,-2,p.y,color);
+      let first=foldedPrism(p,dir,A,color);if(!first)return;
+      let second=foldedPrism(first.p,first.dir,B,color);if(!second)return;
+      let slope=second.dir.y/second.dir.x;
+      let ye=second.p.y+slope*(eye-second.p.x),out=slope-(ye-4)/fe;
+      line(second.p.x,second.p.y,eye,ye,color,2.4);
+      line(eye,ye,eye+4,ye+4*out,color,2.4);flowHead(eye+2,ye+2*out,eye+3.5,ye+3.5*out,color);
+    });
+    ctx.beginPath();ctx.arc(X(f-20),Y(4),4,0,Math.PI*2);ctx.fillStyle='#9b42d0';ctx.fill();
+    label('중간 실상',f-20,3,'#9b42d0',12);
+    document.getElementById('result').textContent=`전반사 4회 · 각배율 ${(f/fe).toFixed(1)}배 · 한쪽 경통의 프리즘 평면 전개도`;
+  }
+  function draw(){
+    let rect=canvas.getBoundingClientRect(),ratio=Math.min(window.devicePixelRatio||1,2);
+    let w=Math.max(320,rect.width),h=Math.max(300,rect.height);
+    if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){
+      canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);
+    }
+    ctx.setTransform(ratio,0,0,ratio,0,0);W=w;H=h;
+    ctx.clearRect(0,0,W,H);S=Math.min((W-26)/56,(H-42)/24);OX=W/2;OY=H/2;
+    const {d,f:fa,h:objh}=state.shown,kind=state.kind;
+    if(kind===5){drawPrism();return}
+    if(kind===6){drawRightPrism();return}
+    if(kind===7){drawCamera();return}
+    if(kind===8){drawMicroscope();return}
+    if(kind===9){drawReflector();return}
+    if(kind===10){drawAberration();return}
+    if(kind===11){drawBinocular();return}
+    const mirror=kind>=2,focal=kind===2?Infinity:((kind===0||kind===4)?fa:-fa);
+    const inv=1/focal-1/d,infinity=Math.abs(inv)<1e-4;
+    const q=infinity?Infinity:1/inv,magnification=-q/d;
+    const ix=mirror?-q:q,iy=magnification*objh;
+    const boundary=(W/2-13)/S,yboundary=(H/2-21)/S;
+    const dh=Math.min(yboundary*.78,Math.max(3.2,objh*1.45));
+    line(-boundary,0,boundary,0,'#94a3b8',1.5,[4,5]);
+    drawDevice(kind,dh);
+    if(kind<2){point(0,'O');point(-fa,'F');point(fa,'F′')}
+    else {point(0,'V');if(kind!==2){point(-focal,'F');point(-2*focal,'C')}}
+    verticalArrow(-d,objh,'#2259c7','물체');
+    if(!infinity&&Math.abs(ix)<boundary-1&&Math.abs(iy)<yboundary-1){
+      verticalArrow(ix,iy,'#9b42d0','상',q<0);
+    }
+    const hits=kind===2?[objh*.8,objh*.25,-objh*.4]:[objh,0,objh*.5];
+    for(let i=0;i<state.rays;i++){
+      let a=hits[i],c=colors[i];
+      line(-d,objh,0,a,c,2.6);
+      let slope=mirror?(objh-a)/d+a/focal:(a-objh)/d-a/focal;
+      let end=mirror?-boundary:boundary;
+      line(0,a,end,a+slope*end,c,2.6);
+      if(!infinity&&q<0){
+        let extend=Math.max(-boundary,Math.min(boundary,ix));
+        line(0,a,extend,a+slope*extend,c,1.6,[6,5]);
+      }
+    }
+    let result=infinity?'상: 무한히 멀리 형성':
+      `상: ${magnification>0?'정립':'도립'} ${q>0?'실상':'허상'} · ${Math.abs(magnification).toFixed(2)}배`;
+    document.getElementById('result').textContent=result;
+  }
+  updateButtons();new ResizeObserver(requestDraw).observe(canvas);requestDraw();
+})();
+</script></body></html>
